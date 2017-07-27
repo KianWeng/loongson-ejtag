@@ -1,0 +1,1090 @@
+define page_address
+printf "\t0x%08x\n", ((struct page *)$arg0-(struct page *)mem_map)*16*1024
+end
+
+define mydumparea 
+set $nr_free=contig_page_data.node_zonelists->zones[0]->free_area[$arg0]->nr_free
+if $nr_free
+printf "\norder=%d,trunk size=0x%x,address list:\n",$arg0, (1<<$arg0)*16*1024
+end
+
+set $a=contig_page_data.node_zonelists->zones[0]->free_area[$arg0]->free_list->next
+set $n=0
+while $n<$nr_free
+page_address $a
+set $a=$a->next
+set $n=$n+1
+end
+end
+
+define dumpmem
+set $n1=0
+while $n1<11
+mydumparea $n1
+set $n1=$n1+1
+end
+end
+
+define getcurrent
+ getversion
+if $argc >0
+set $cpuno=$arg0
+else
+set $cpuno=0
+end
+if($linuxver>=0x20600)
+set $current=((struct thread_info *)((((long *)&kernelsp)[$cpuno])&~(sizeof(init_thread_union)-1)))
+if $current
+set $task=$current->task
+else
+set $task=0
+end
+else
+set $current=((struct task_struct  *)((((long *)&kernelsp)[$cpuno])&~(sizeof(init_task_union)-1)))
+set $task=$current
+end
+end
+
+define print_path0
+python import re,sys
+set $d=(struct dentry *)$arg0
+python pname=[]
+while 1
+ python pname.insert(0,re.findall(r'"(.+)"',str(gdb.parse_and_eval('$d->d_name.name')))[0])
+ if $d->d_parent == $d
+  loop_break
+ end
+ set $d=$d->d_parent 
+end
+
+python sys.stdout.write("/".join(pname))
+
+end
+
+define print_path
+set $d=(struct dentry *)$arg0
+python 
+import re,sys
+pname=[]
+d=gdb.parse_and_eval('$d')
+while 1: 
+ pname.insert(0,re.findall(r'"(.+)"',str(d['d_name']['name']))[0])
+ if int(d['d_parent']) == int(d): break
+ d=d['d_parent']
+sys.stdout.write("/".join(pname))
+end
+
+
+end
+
+
+
+define fds
+ getversion
+ if $argc > 0
+   set $task = (struct task_struct *)$arg0
+  else
+   if !$task
+   getcurrent
+   end
+ end
+ set $files = $task->files
+ set $fdt = $files->fdt
+ set $i=0
+
+ while $i<$fdt->max_fds
+ set $file = $fdt->fd[$i]
+  if $file
+    printf "%d\t->\t",$i
+    print_path $file->f_path.dentry
+    printf "\n"
+  end
+  set $i=$i+1
+ end
+ 
+
+end
+
+
+define vma1
+ getversion
+ if $argc > 0
+   set $task = (struct task_struct *)$arg0
+  else
+   if !$task
+   getcurrent
+   end
+ end
+if $task->mm
+ set $t = $task->mm->mmap
+ while $t
+  printf "start:\t%p\tend:\t%p\tpgoff:\t%x\t %c%c%c%c\t ", $t->vm_start, $t->vm_end, $t->vm_pgoff*16*1024,$t->vm_flags&1?'r':'-',$t->vm_flags&2?'w':'-',$t->vm_flags&4?'x':'-',$t->vm_flags&8?'s':'-'
+  if $t->vm_file
+    if($linuxver>=0x20613)
+     print_path $t->vm_file->f_path->dentry
+     #printf "%s\t mapping: (struct address_space *)%p,(struct vm_area_struct *)%p", $t->vm_file->f_path->dentry->d_name.name, $t->vm_file->f_mapping, $t
+     printf "\t mapping: (struct address_space *)%p,(struct vm_area_struct *)%p", $t->vm_file->f_mapping, $t
+    else
+    if($linuxver>=0x20500)
+     printf "%s\t mapping: (struct address_space *)%p", $t->vm_file->f_dentry->d_name.name, $t->vm_file->f_mapping
+    else
+     printf "%s\t mapping: (struct file_operations *)%p", $t->vm_file->f_dentry->d_name.name, $t->vm_file->f_op
+    end
+    end
+  end
+  set $t=$t->vm_next
+  echo \n
+  end
+ end
+end
+
+
+define vma
+ set logging off
+ shell rm -f /tmp/gdb.maps
+ set height 0
+ set logging on /tmp/gdb.maps
+ getversion
+ if !$task
+  getcurrent
+ end
+if $task->mm
+ set $t = $task->mm->mmap
+ while $t
+  printf "%p-%p %c%c%c%c %x ", $t->vm_start, $t->vm_end, $t->vm_flags&1?'r':'-',$t->vm_flags&2?'w':'-',$t->vm_flags&4?'x':'-',$t->vm_flags&8?'s':'-',$t->vm_pgoff*16*1024
+  if $t->vm_file
+     set $inode=$t->vm_file->f_path.dentry->d_inode
+     printf "%02x:%02x %lu ", $inode->i_sb->s_dev>>20, $inode->i_sb->s_dev&0xfffff, $inode->i_ino
+    if($linuxver>=0x20613)
+     print_path $t->vm_file->f_path->dentry
+    else
+     print_path $t->vm_file->f_dentry
+    end
+  end
+  set $t=$t->vm_next
+  echo \n
+  end
+ end
+ set logging off
+ if $argc > 0
+ shell perl scripts/maps_to_gdb /tmp/gdb.maps $arg0 > /tmp/gdb.cmd
+ source /tmp/gdb.cmd
+ set print asm-demangle on
+ end
+end
+
+#do_anonymous_page
+
+
+define mygetpid
+getcurrent
+#p $task->nsproxy->pid_ns->pidmap
+#x/100bx $task->nsproxy->pid_ns->pidmap->page
+
+set $myc=(int *)$task->nsproxy->pid_ns->pidmap->page
+
+set $nr=0
+	while $nr<=0x8000
+
+		if (int)$myc[$nr/32] == 0
+			set $nr = $nr + 32
+			loop_continue
+		end
+
+		if ($myc[$nr/32]&(1<<($nr&31))) == 0
+			set $nr=$nr+1
+			loop_continue
+		end
+
+		set $mynode=pid_hash[$nr*0x9e370001 >> (32 - pidhash_shift)]->first
+
+		while $mynode
+			set $mypid= (struct pid *)((int)$mynode - (int)&((struct pid *)0)->pid_chain)
+			if $mypid->nr == $nr
+			p *$mypid
+			set $ptask=(struct task_struct *)((int)$mypid->tasks[0].first - (int)&((struct task_struct *)0)->pids[0].node)
+			printf "%d\t%s\n", $ptask->pid,$ptask->comm
+			 printf "ra = 0x%x\n", $ptask->thread.reg31
+				loop_break
+			end
+			set $mynode = $mynode->next
+		end
+
+		set $nr=$nr+1
+	end
+
+end
+
+
+define modules0
+set $mymodlist = modules->next
+set logging off
+shell rm -f /tmp/gdb.func
+set $mcnt=0
+set logging on /tmp/gdb.func
+while (void *)$mymodlist != (void *)&modules
+
+set $mymod=(struct module *)((void *)$mymodlist - (void*)&((struct module *)0)->list.next)
+#eval "set $mod%d=$mymod", $mcnt
+printf "set $mod%d=(struct module *)%p\n", $mcnt, $mymod
+set $mcnt=$mcnt+1
+
+ if $argc > 0
+    printf "add-symbol-file\t$arg0/%s.ko 0 ",$mymod->name
+ else
+   printf "add-symbol-file\tmodules/%s.ko 0 ",$mymod->name
+ end
+eval "set $attrs=((struct module_sect_attrs *)%p)",$mymod->sect_attrs
+set $n=0
+while $n<$attrs->nsections
+printf "-s %s %p ", $attrs->attrs[$n]->name,$attrs->attrs[$n]->address
+set $n=$n+1
+end
+echo\n
+set $mymodlist = $mymodlist->next
+end
+set logging off
+source /tmp/gdb.func
+end
+
+define modules
+init
+getversion
+set $mymodlist = modules->next
+set logging off
+shell rm -f /tmp/gdb.func
+shell rm -f /tmp/loadmodule.txt
+set logging on /tmp/gdb.func
+set $mcnt=0
+while (void *)$mymodlist != (void *)&modules
+
+set $mymod=(struct module *)((void *)$mymodlist - (void*)&((struct module *)0)->list.next)
+#eval "set $mod%d=$mymod", $mcnt
+printf "set $mod%d=(struct module *)%p\n", $mcnt, $mymod
+set $mcnt=$mcnt+1
+ if $argc == 0
+    printf "shell ./tools/load-module\tmodules/%s.ko %p 0x%lx %d >> /tmp/loadmodule.txt\n",$mymod->name, $mymod->module_core, (long)$mymod->module_init, ($linuxver<0x2061f)?$mykallsyms:0
+ else
+   printf "shell ./tools/load-module\t"
+   set $i=0 
+   while ($mymod)->name[$i]!=0 && $i<30
+   printf "%c",$mymod->name[$i]
+   set $i=$i+1
+   end
+   printf ".ko %p %d > /tmp/loadmodule.txt\n", $mymod->module_core, ($linuxver<0x2061f)?$mykallsyms:0
+ end
+set $n=0
+echo\n
+set $mymodlist = $mymodlist->next
+end
+set logging off
+source /tmp/gdb.func
+source /tmp/loadmodule.txt
+echo
+end
+
+define getversion
+if linux_banner[19]=='.'
+set $linuxver= ((linux_banner[14]-'0')<<16)+((linux_banner[16]-'0')<<8)+(linux_banner[18]-'0')
+else
+set $linuxver= ((linux_banner[14]-'0')<<16)+((linux_banner[16]-'0')<<8)+(linux_banner[18]-'0')*10+(linux_banner[19]-'0')
+end
+end
+
+
+define tasks24
+getcurrent
+set $curtask=$task
+getversion
+set $p=init_tasks[0]
+while $p 
+ set $task = $p
+ set $tinfo = &$task->thread
+ set $uregs = (struct pt_regs *)((void *)$task+sizeof(init_task_union)-32-sizeof(struct pt_regs))
+
+ if $task == $curtask
+ printf "* "
+ else
+ printf "  "
+ end
+
+ if $argc > 0
+  if $arg0 == $task->pid 
+ printf "%d %d %s ra=%p sp=%p epc=%p usp=%p task=%p tinfo=%p uregs=%p stat=0x%x\n", $task->pid, $task->p_pptr->pid, $task->comm,$task->thread.reg31,$task->thread.reg29,$uregs->cp0_epc,$uregs->regs[29],$task, $tinfo, $uregs, $task->state
+  loop_break
+  end
+ else
+ printf "%d %d %s ra=%p sp=%p epc=%p usp=%p task=%p tinfo=%p uregs=%p stat=0x%x\n", $task->pid, $task->p_pptr->pid, $task->comm,$task->thread.reg31,$task->thread.reg29,$uregs->cp0_epc,$uregs->regs[29],$task, $tinfo, $uregs, $task->state
+ end
+ set $p=$p->next_task
+ if $p==init_tasks[0]
+ loop_break
+ end
+ 
+end
+end
+
+define threads
+ set $t=&((struct task_struct *)$arg0)->thread_group
+while $t 
+ set $tp = ((struct task_struct *)((void *)$t - (void *)&((struct task_struct *)0)->thread_group))
+ printf "%s\n", $tp->comm
+ set $t=$t->next
+ if $t==&((struct task_struct *)$arg0)->thread_group
+ loop_break
+ end
+end
+end
+
+define bt_kernel
+regs_save
+regs_kernel $task
+bt
+regs_restore
+end
+
+define tasks
+getversion
+set $p=&init_task->tasks
+while $p 
+ set $task = (struct task_struct *)((void *)$p - (void *)&((struct task_struct *)0)->tasks)
+ set $curtask=$task
+while $task
+if($linuxver<=0x20615)
+ set $tinfo = $task->thread_info
+ set $uregs = (struct pt_regs *)((void *)$task->thread_info+sizeof(init_thread_union)-32-sizeof(struct pt_regs))
+else
+ set $tinfo = ((struct thread_info *)($task)->stack)
+ set $uregs = (struct pt_regs *)($task->stack+sizeof(init_thread_union)-32-sizeof(struct pt_regs))
+end
+
+set $savetask=$task
+set $i=0
+while ($i<sizeof(kernelsp)/sizeof(kernelsp[0]))
+ getcurrent $i
+ if $task == 0
+ printf "   "
+ loop_break
+ end
+ if $task == $savetask
+ printf "*<%d> ",$i
+ loop_break
+ end
+set $i=$i+1
+end
+set $task=$savetask
+
+ printf "%d %d %s ra=%p sp=%p epc=%p usp=%p task=%p tinfo=%p uregs=%p stat=0x%x\n", $task->pid, $task->parent->pid, $task->comm,$task->thread.reg31,$task->thread.reg29,$uregs->cp0_epc,$uregs->regs[29],$task, $tinfo, $uregs, $task->state
+
+ if $argc > 0
+  $arg0
+ end
+
+ set $t=((struct task_struct *)$task)->thread_group.next
+ if $t==&((struct task_struct *)$curtask)->thread_group || $t == 0
+ loop_break
+ end
+ set $task = ((struct task_struct *)((void *)$t - (void *)&((struct task_struct *)0)->thread_group))
+end
+ set $p=$p->next
+ if $p==&init_task->tasks
+ loop_break
+ end
+ 
+end
+end
+
+define tasksel
+ if $argc > 0
+   set $task=((struct task_struct *)$arg0)
+ else
+   getcurrent
+ end
+init
+if($linuxver<=0x20615)
+ set $tinfo = $task->thread_info
+ set $uregs = (struct pt_regs *)((void *)$task->thread_info+sizeof(init_thread_union)-32-sizeof(struct pt_regs))
+else
+ set $tinfo = ((struct thread_info *)($task)->stack)
+ set $uregs = (struct pt_regs *)($task->stack+sizeof(init_thread_union)-32-sizeof(struct pt_regs))
+end
+ printf "%d %d %s ra=%p sp=%p epc=%p usp=%p task=%p tinfo=%p uregs=%p stat=0x%x\n", $task->pid, $task->parent->pid, $task->comm,$task->thread.reg31,$task->thread.reg29,$uregs->cp0_epc,$uregs->regs[29],$task, $tinfo, $uregs, $task->state
+shell rm -f /tmp/tasksel.txt
+set logging on /tmp/tasksel.txt
+printf "monitor setpgd %p\n", $task->mm.pgd
+set logging off
+source /tmp/tasksel.txt
+end
+
+define taskdesel
+monitor setpgd 0
+end
+
+define regs_save
+frame 0
+set $mypc=$pc
+set $mysp=$sp
+set $myra=$ra
+set $mygp=$gp
+set $myat=$at
+set $myv0=$v0
+set $myv1=$v1
+set $mya0=$a0
+set $mya1=$a1
+set $mya2=$a2
+set $mya3=$a3
+set $myt0=$t0
+set $myt1=$t1
+set $myt2=$t2
+set $myt3=$t3
+set $myt4=$t4
+set $myt5=$t5
+set $myt6=$t6
+set $myt7=$t7
+set $mys0=$s0
+set $mys1=$s1
+set $mys2=$s2
+set $mys3=$s3
+set $mys4=$s4
+set $mys5=$s5
+set $mys6=$s6
+set $mys7=$s7
+set $myt8=$t8
+set $myt9=$t9
+set $myk0=$k0
+set $myk1=$k1
+set $mys8=$s8
+end
+
+define regs_restore
+frame 0
+set $sp=$mysp
+set $gp=$mygp
+set $at=$myat
+set $v0=$myv0
+set $v1=$myv1
+set $a0=$mya0
+set $a1=$mya1
+set $a2=$mya2
+set $a3=$mya3
+set $t0=$myt0
+set $t1=$myt1
+set $t2=$myt2
+set $t3=$myt3
+set $t4=$myt4
+set $t5=$myt5
+set $t6=$myt6
+set $t7=$myt7
+set $s0=$mys0
+set $s1=$mys1
+set $s2=$mys2
+set $s3=$mys3
+set $s4=$mys4
+set $s5=$mys5
+set $s6=$mys6
+set $s7=$mys7
+set $t8=$myt8
+set $t9=$myt9
+set $k0=$myk0
+set $k1=$myk1
+set $s8=$mys8
+set $pc=$mypc
+set $ra=$myra
+end
+
+define regs_user
+ getversion
+if(($linuxver && 0xfff00) ==0x20400)
+ set $uregs = (struct pt_regs *)((void *)$arg0+sizeof(init_task_union)-32-sizeof(struct pt_regs))
+else
+if($linuxver<=0x20615)
+ set $tinfo = $task->thread_info
+ set $uregs = (struct pt_regs *)(((void *)((struct task_struct *)$arg0)->thread_info)+sizeof(init_thread_union)-32-sizeof(struct pt_regs))
+else
+ set $uregs = (struct pt_regs *)(((struct task_struct *)$arg0)->stack+sizeof(init_thread_union)-32-sizeof(struct pt_regs))
+end
+end
+set $pc=((struct pt_regs *)$uregs)->cp0_epc
+set $at=((struct pt_regs *)$uregs)->regs[1]
+set $v0=((struct pt_regs *)$uregs)->regs[2]
+set $v1=((struct pt_regs *)$uregs)->regs[3]
+set $a0=((struct pt_regs *)$uregs)->regs[4]
+set $a1=((struct pt_regs *)$uregs)->regs[5]
+set $a2=((struct pt_regs *)$uregs)->regs[6]
+set $a3=((struct pt_regs *)$uregs)->regs[7]
+set $t0=((struct pt_regs *)$uregs)->regs[8]
+set $t1=((struct pt_regs *)$uregs)->regs[9]
+set $t2=((struct pt_regs *)$uregs)->regs[10]
+set $t3=((struct pt_regs *)$uregs)->regs[11]
+set $t4=((struct pt_regs *)$uregs)->regs[12]
+set $t5=((struct pt_regs *)$uregs)->regs[13]
+set $t6=((struct pt_regs *)$uregs)->regs[14]
+set $t7=((struct pt_regs *)$uregs)->regs[15]
+set $s0=((struct pt_regs *)$uregs)->regs[16]
+set $s1=((struct pt_regs *)$uregs)->regs[17]
+set $s2=((struct pt_regs *)$uregs)->regs[18]
+set $s3=((struct pt_regs *)$uregs)->regs[19]
+set $s4=((struct pt_regs *)$uregs)->regs[20]
+set $s5=((struct pt_regs *)$uregs)->regs[21]
+set $s6=((struct pt_regs *)$uregs)->regs[22]
+set $s7=((struct pt_regs *)$uregs)->regs[23]
+set $t8=((struct pt_regs *)$uregs)->regs[24]
+set $t9=((struct pt_regs *)$uregs)->regs[25]
+set $k0=((struct pt_regs *)$uregs)->regs[26]
+set $k1=((struct pt_regs *)$uregs)->regs[27]
+set $gp=((struct pt_regs *)$uregs)->regs[28]
+set $sp=((struct pt_regs *)$uregs)->regs[29]
+set $s8=((struct pt_regs *)$uregs)->regs[30]
+set $ra=((struct pt_regs *)$uregs)->regs[31]
+end
+
+define regs_kernel
+set $pc=((struct task_struct *)$arg0)->thread.reg31
+set $sp=((struct task_struct *)$arg0)->thread.reg29
+set $s8=((struct task_struct *)$arg0)->thread.reg30
+set $s7=((struct task_struct *)$arg0)->thread.reg23
+set $s6=((struct task_struct *)$arg0)->thread.reg22
+set $s5=((struct task_struct *)$arg0)->thread.reg21
+set $s4=((struct task_struct *)$arg0)->thread.reg20
+set $s3=((struct task_struct *)$arg0)->thread.reg19
+set $s2=((struct task_struct *)$arg0)->thread.reg18
+set $s1=((struct task_struct *)$arg0)->thread.reg17
+set $s0=((struct task_struct *)$arg0)->thread.reg16
+end
+
+define regs_exception
+set $pc=((struct pt_regs *)$arg0)->cp0_epc
+set $at=((struct pt_regs *)$arg0)->regs[1]
+set $v0=((struct pt_regs *)$arg0)->regs[2]
+set $v1=((struct pt_regs *)$arg0)->regs[3]
+set $a0=((struct pt_regs *)$arg0)->regs[4]
+set $a1=((struct pt_regs *)$arg0)->regs[5]
+set $a2=((struct pt_regs *)$arg0)->regs[6]
+set $a3=((struct pt_regs *)$arg0)->regs[7]
+set $t0=((struct pt_regs *)$arg0)->regs[8]
+set $t1=((struct pt_regs *)$arg0)->regs[9]
+set $t2=((struct pt_regs *)$arg0)->regs[10]
+set $t3=((struct pt_regs *)$arg0)->regs[11]
+set $t4=((struct pt_regs *)$arg0)->regs[12]
+set $t5=((struct pt_regs *)$arg0)->regs[13]
+set $t6=((struct pt_regs *)$arg0)->regs[14]
+set $t7=((struct pt_regs *)$arg0)->regs[15]
+set $s0=((struct pt_regs *)$arg0)->regs[16]
+set $s1=((struct pt_regs *)$arg0)->regs[17]
+set $s2=((struct pt_regs *)$arg0)->regs[18]
+set $s3=((struct pt_regs *)$arg0)->regs[19]
+set $s4=((struct pt_regs *)$arg0)->regs[20]
+set $s5=((struct pt_regs *)$arg0)->regs[21]
+set $s6=((struct pt_regs *)$arg0)->regs[22]
+set $s7=((struct pt_regs *)$arg0)->regs[23]
+set $t8=((struct pt_regs *)$arg0)->regs[24]
+set $t9=((struct pt_regs *)$arg0)->regs[25]
+set $k0=((struct pt_regs *)$arg0)->regs[26]
+set $k1=((struct pt_regs *)$arg0)->regs[27]
+set $gp=((struct pt_regs *)$arg0)->regs[28]
+set $sp=((struct pt_regs *)$arg0)->regs[29]
+set $s8=((struct pt_regs *)$arg0)->regs[30]
+set $ra=((struct pt_regs *)$arg0)->regs[31]
+end
+
+define regs_to_core
+set logging off
+shell rm -f /tmp/tasksel.txt
+set logging on /tmp/tasksel.txt
+info register
+set logging off
+shell perl -ane 'while(/([0-9a-f]{8,})/g){print pack(q(Q),hex($1));}' /tmp/tasksel.txt > /tmp/reg.txt 
+shell kcore /tmp/core /tmp/reg.txt
+end
+
+define btask
+getversion
+if($linuxver>=0x20600)
+b $arg1 if ((struct thread_info *)((((long *)&kernelsp)[0])&~(sizeof(init_thread_union)-1)))->task==$arg0
+else
+b $arg1 if ((struct task_struct  *)((((long *)&kernelsp)[0])&~(sizeof(init_task_union)-1)))==$arg0
+end
+
+end
+
+define btask1
+getversion
+b $arg1 
+if($linuxver>=0x20600)
+
+commands
+if ((struct thread_info *)((((long *)&kernelsp)[0])&~(sizeof(init_thread_union)-1)))->task!=$arg0
+c
+end
+end
+
+else
+
+commands
+if ((struct task_struct  *)((((long *)&kernelsp)[0])&~(sizeof(init_task_union)-1)))==$arg0
+c
+end
+end
+
+end
+
+end
+
+document btask
+ btask task breakpc
+end
+
+document tasks
+ list all tasks
+end
+
+document vma
+ list vma area
+end
+
+define init
+ getversion
+if($linuxver>=0x20600)
+set $pagesize=0x4000
+set $mm=((struct task_struct *)((void *)(init_task.tasks->next)-(void *)&(((struct task_struct *)0)->tasks)))->mm
+if $mm
+ set $elf_info=(long *)($mm->saved_auxv)
+
+ set $i=0
+ while $i<32
+ if $elf_info[$i] == 6
+ set $pagesize=$elf_info[$i+1]
+ loop_break
+ end
+ set $i=$i+2
+ end
+end
+
+shell rm -f /tmp/tasksel.txt
+set logging on /tmp/tasksel.txt
+if !$notejtag
+monitor kernel kallsyms
+printf "monitor setpgsize 0x%x\n", $pagesize
+else
+set $mykallsyms=1
+end
+set logging off
+source /tmp/tasksel.txt
+else
+monitor setpgsize 0x4000
+end
+end
+
+define prq
+set $rq=per_cpu__runqueues
+p $rq->nr_running
+set $task=$rq->curr
+ printf "%d %d %s ra=%p epc=%p task=%p tinfo=%p stat=0x%x\n", $task->pid, $task->parent->pid, $task->comm,$task->thread.reg31,$uregs->cp0_epc,$task, $tinfo, $task->state
+set $cfs_rp = &$rq->cfs
+end
+
+define modules24
+init
+set logging off
+shell rm -f /tmp/gdb.func
+shell rm -f /tmp/loadmodule.txt
+#init_task_union.task->next_task->mm
+set logging on /tmp/gdb.func
+printf "monitor setpgsize 0x%x\n", 0x4000
+set logging off
+source /tmp/gdb.func
+shell rm -f /tmp/gdb.func
+set logging on /tmp/gdb.func
+ 
+set $mymod = module_list
+while $mymod && $mymod->next
+printf "shell ./tools/load-module24\tmodules/%s.o %p >> /tmp/loadmodule.txt\n",$mymod->name, $mymod
+set $mymod=$mymod->next
+end
+set logging off
+source /tmp/gdb.func
+source /tmp/loadmodule.txt
+
+end
+
+define modules24_64
+init
+set logging off
+shell rm -f /tmp/gdb.func
+shell rm -f /tmp/loadmodule.txt
+#init_task_union.task->next_task->mm
+set logging on /tmp/gdb.func
+printf "monitor setpgsize 0x%x\n", 0x4000
+set logging off
+source /tmp/gdb.func
+shell rm -f /tmp/gdb.func
+set logging on /tmp/gdb.func
+ 
+set $mymod = module_list
+while $mymod && $mymod->next
+printf "shell ./tools/load-module24.mips64\tmodules/%s.o %p >> /tmp/loadmodule.txt\n",$mymod->name, $mymod
+set $mymod=$mymod->next
+end
+set logging off
+source /tmp/gdb.func
+source /tmp/loadmodule.txt
+
+end
+
+define showinterrupts
+set $cpus=(sizeof(kernelsp)/sizeof(kernelsp[0]))
+set $nirqs=sizeof(irq_desc)/sizeof(irq_desc[0])
+set $i=0
+while $i<$nirqs
+ if  !irq_desc[$i].action
+  set $i=$i+1
+   if $i<$nirqs
+    loop_continue
+   else
+    loop_break
+   end
+end
+printf "%d: ",$i
+set $j=0
+while $j<$cpus
+printf "%d ", irq_desc[$i]->kstat_irqs[$j]
+set $j=$j+1
+end
+
+if $linuxver >= 0x30000
+printf "%s %s\n", irq_desc[$i]->irq_data.chip->name, irq_desc[$i].action->name
+else
+printf "%s %s\n", irq_desc[$i].chip->name, irq_desc[$i].action->name
+end
+set $i=$i+1
+end
+
+end
+
+define show_dir
+if $argc<4
+python fifo=[]
+ if $argc > 0
+ set $recursive=$arg0
+ else
+ set $recursive=0
+ end
+end
+
+if $argc >1
+set $rd=(struct dentry *)$arg1
+else
+set $rd=init_fs.root.dentry
+end
+set $t = $rd->d_subdirs.next
+while $t!=&$rd->d_subdirs
+set $d=(struct dentry *)((void *)$t - (void *)&((struct dentry *)0)->d_u.d_child)
+set $d0=$d
+print_path $d
+if $recursive &2
+printf " (struct dentry *)0x%lx\n",$d0
+else
+printf "\n"
+end
+set $d=$d0
+
+if $recursive&1 && (($d->d_inode->i_mode>>12)&0xf) == 4
+python fifo.append([gdb.parse_and_eval('$d'),gdb.parse_and_eval('$t'),gdb.parse_and_eval('$rd')])
+ show_dir $recursive $d $t $rd
+python
+d,t,rd = fifo.pop()
+gdb.execute("set $d=(struct dentry *)" + str(d))
+gdb.execute("set $t=(struct list_head *)" + str(t))
+gdb.execute("set $rd=(struct dentry *)" + str(rd))
+end
+
+
+end
+
+set $t=$t->next
+
+end
+
+end
+
+define downlod_dfile
+set $d=(struct dentry *)$arg0
+python
+import re
+name = re.findall(r'"(.+)"',str(d['d_name']['name']))[0]
+print(name)
+size=d['d_inode']['i_size']
+t=d['d_inode']['i_mapping]['page_tree']
+rnode = int(str(t['rnode']),0)
+if rnode&1:
+ stack=[]
+ h = int(t['height'])
+ nd = rnode&~1
+ stack.append([nd,h])
+ nodes=[]
+ 
+ while len(stack):
+   n,h=stack.pop(0)
+   i=0
+   while 1:
+     n1=int(gdb.parse_and_eval('(unsigned long)(((struct radix_tree_node *)0x%x)->slots[%d])'%(n,i)))
+     if n1:
+      if h>1:
+       stack.insert(i,[n1,h-1])
+      else:
+       nodes.append(n1)
+     else :
+      break
+     i+=1
+else :
+ nodes=[rnode]
+
+n = int(gdb.parse_and_eval('sizeof(mem_section)/sizeof(mem_section[0])'))
+pagesize = int(gdb.parse_and_eval('$pagesize'))
+addrs=[]
+inf = gdb.selected_inferior()
+f=open('/tmp/' + name,'wb')
+for p in nodes:
+  o=int(gdb.parse_and_eval('((struct page *)(0x%x))->flags/(0x100000000ULL/0x%x)' % (p,n)))
+  pfn=int(gdb.parse_and_eval('(struct page *)(0x%x)-(struct page *)((long)mem_section[0x%x][0]&~0x3)' % (p,o)))
+  a=0x80000000+pfn*pagesize
+  addrs.append(a)
+  m = inf.read_memory(a, pagesize if size>pagesize else size)
+  f.write(m.tobytes())
+  size -= pagesize
+   
+f.close()
+end
+end
+
+define dentry_tomem
+set $d=(struct dentry *)$arg0
+set $t = $d->d_inode->i_mapping->page_tree
+if ((long)$t.rnode&1)
+set $h=$t.height
+set $nd = (struct radix_tree_node *)((long)$t.rnode&~1)
+while $h
+set $nd=(struct radix_tree_node *)($nd->slots[0])
+set $h=$h-1
+end
+set $p=(struct page *)($nd)
+else
+set $p = (struct page *)((long)$t.rnode&~1)
+end
+set $n= sizeof(mem_section)/sizeof(mem_section[0])
+set $o=$p->flags/(0x100000000ULL/$n)
+set $pfn=$p-(struct page *)((long)mem_section[$o][0]&~0x3)
+set $a=0x80000000+$pfn*$pagesize
+p/x $a
+end
+
+define badf
+ set $d=$arg0
+ if $d>1
+  set $d=$d-1
+  badf $d
+ end
+ p $arg0
+end
+
+python
+import re, sys
+class DirCommand(gdb.Command):
+    def printpath(self, d):
+     pname=[]
+     while 1: 
+      pname.insert(0,re.findall(r'"(.+)"',str(d['d_name']['name']))[0])
+      if int(d['d_parent']) == int(d): break
+      d=d['d_parent']
+     sys.stdout.write("/".join(pname))
+     print()
+    def page2pfn(page):
+      pgt = gdb.lookup_type('struct page').pointer()
+      mem_map = gdb.parse_and_eval('mem_map')
+      if mem_map:
+         pfn=gdb.Value(p).cast(pgt)-mem_map
+      else :
+       mem_section = gdb.parse_and_eval('mem_section')
+       n= mem_section.type.sizeof//mem_section[0].type.sizeof
+       o = int(gdb.Value(p).cast(pgt)['flags'])//(0x100000000//n)
+       pfn=gdb.Value(p).cast(pgt)-gdb.Value(mem_section[o][0]['section_mem_map']&~3).cast(pgt)
+      return pfn
+
+    def downloadfile(self,d):
+      name = re.findall(r'"(.+)"',str(d['d_name']['name']))[0]
+      print(name)
+      size=d['d_inode']['i_size']
+      t=d['d_inode']['i_mapping']['page_tree']
+      rnode = int(str(t['rnode']),0)
+      
+      indirect = (rnode&1)
+      if gdb.lookup_global_symbol('init_fs').type['root'].type==gdb.lookup_type('struct dentry').pointer():
+        indirect=not indirect
+      if indirect:
+       stack=[]
+       h = int(t['height'])
+       nd = rnode&~1
+       stack.append([nd,h])
+       nodes=[]
+       
+       while len(stack):
+         n,h=stack.pop(0)
+         i=0
+         node = gdb.Value(n).cast(t['rnode'].type)
+         while 1:
+           n1= node['slots'][i]
+           if n1:
+            if h>1:
+             stack.insert(i,[n1,h-1])
+            else:
+             nodes.append(n1)
+           else :
+            break
+           i+=1
+      else :
+       nodes=[rnode]
+      
+
+      pgt = gdb.lookup_type('struct page').pointer()
+      mem_map = gdb.lookup_global_symbol('mem_map')
+      if not mem_map or not int(mem_map.value()):
+         usememmap = 0
+      else :
+         usememmap =1
+         mem_map = mem_map.value()
+      if not usememmap:
+       mem_section = gdb.parse_and_eval('mem_section')
+       n= mem_section.type.sizeof//mem_section[0].type.sizeof
+       if gdb.lookup_type('long').sizeof == 8:
+         page_offset = 0x9800000000000000
+         sections_pgdiv = 0x10000000000000000//n
+       else:
+         page_offset = 0x80000000
+         sections_pgdiv = 0x100000000//n
+
+      pagesize = int(gdb.parse_and_eval('$pagesize'))
+      addrs=[]
+      inf = gdb.selected_inferior()
+
+      f=open('/tmp/' + name,'wb')
+      for p in nodes:
+        if usememmap:
+         pfn=gdb.Value(p).cast(pgt)-mem_map
+        else :
+         o = int(gdb.Value(p).cast(pgt)['flags'])//sections_pgdiv
+         pfn=gdb.Value(p).cast(pgt)-gdb.Value(mem_section[o][0]['section_mem_map']&~3).cast(pgt)
+        a=page_offset+pfn*pagesize
+        addrs.append(a)
+        m = inf.read_memory(a, pagesize if size>pagesize else size)
+        f.write(m.tobytes())
+        size -= pagesize
+         
+      f.close()
+    def __init__(self):
+        gdb.Command.__init__(self, 'mydir', gdb.COMMAND_DATA,
+                             gdb.COMPLETE_NONE, True)
+        self.data={}
+    def ls(self, arg, from_tty):
+       dirs=list(filter(len,arg.split('/')))
+       fs=gdb.parse_and_eval('init_fs')
+       if fs['root'].type==gdb.lookup_type('struct dentry').pointer():
+         rd = fs['root']
+       else :
+         rd = fs['root']['dentry'] 
+       t = rd['d_subdirs']['next']
+       while int(t)!=int(rd['d_subdirs'].address):
+        a = int(t) - int(gdb.Value(0).cast(rd.type)['d_u']['d_child'].address)
+        d=gdb.Value(a).cast(rd.type)
+        #self.printpath(d)
+        name = re.findall(r'"(.+)"',str(d['d_name']['name']))[0]
+        if not dirs:
+           print(name)
+        elif name == dirs[0]:
+          
+           if ((d['d_inode']['i_mode']>>12)&0xf) != 4:
+            print(d['d_name']['name'])
+           else :
+             dirs.pop(0)
+             rd = d
+             t = rd['d_subdirs']['next']
+             continue
+        t=t['next']
+    def get(self, arg, from_tty):
+       dirs=list(filter(len,arg.split('/')))
+       fs=gdb.parse_and_eval('init_fs')
+       if fs['root'].type==gdb.lookup_type('struct dentry').pointer():
+         rd = fs['root']
+       else :
+         rd = fs['root']['dentry'] 
+       t = rd['d_subdirs']['next']
+       while int(t)!=int(rd['d_subdirs'].address):
+        a = int(t) - int(gdb.Value(0).cast(rd.type)['d_u']['d_child'].address)
+        d=gdb.Value(a).cast(rd.type)
+        #self.printpath(d)
+        name = re.findall(r'"(.+)"',str(d['d_name']['name']))[0]
+        if not dirs:
+           print('missing file name')
+           return
+        elif name == dirs[0]:
+          
+           if ((d['d_inode']['i_mode']>>12)&0xf) != 4:
+            self.downloadfile(d)
+            return
+           else :
+             dirs.pop(0)
+             rd = d
+             t = rd['d_subdirs']['next']
+             continue
+        t=t['next']
+    def linuxver(self):
+        if 'ver' not in self.data:
+           linux_banner=gdb.lookup_global_symbol('linux_banner').value()
+           l=list(map(int,re.findall(r'Linux version (\d)\.(\d+)\.(\d+)',str(linux_banner))[0]))
+           self.data['linuxver'] = (l[0]<<16)|(l[1]<<8)|l[2]
+        return self.data['linuxver']
+    def getpagesize(self):
+        if 'pagesize' not in self.data:
+          pagesize = 0x4000
+          if self.linuxver()>=0x20600:
+              init_task = gdb.lookup_global_symbol('init_task').value().address
+              next_task=gdb.Value(int(init_task['tasks']['next'])-int(gdb.Value(0).cast(init_task.type)['tasks']['next'].address)).cast(init_task.type)
+              mm=next_task['mm']
+              if mm:
+                elf_info=mm['saved_auxv'].address.cast(gdb.lookup_type('int').pointer())
+                i=0
+                while i<32:
+                   t= int(elf_info[i])
+                   if t==6:
+                     pagesize = int(elf_info[i+1])
+                     break
+                   i+=2
+          self.data['pagesize'] = pagesize
+        return self.data['pagesize']
+    def __getitem__(self,key):
+        if key in self.data: return self.data[key]
+        if key == 'linuxver': return self.linuxver()
+        elif key == 'pagesize': return self.getpagesize()
+        else : raise Exception('error no key')
+
+class DirCommand_ls(DirCommand):
+    def __init__(self,dircmd):
+        self.data = dircmd.data
+        gdb.Command.__init__(self, 'mydir ls', gdb.COMMAND_DATA,
+                             gdb.COMPLETE_NONE)
+    def invoke(self, arg, from_tty):
+        self.ls(arg,from_tty)
+
+class DirCommand_get(DirCommand):
+    def __init__(self,dircmd):
+        self.data = dircmd.data
+        gdb.Command.__init__(self, 'mydir get', gdb.COMMAND_DATA,
+                             gdb.COMPLETE_NONE)
+    def invoke(self, arg, from_tty):
+        self.get(arg,from_tty)
+dircmd = DirCommand()
+DirCommand_ls(dircmd)
+DirCommand_get(dircmd)
+end
+
+init
+

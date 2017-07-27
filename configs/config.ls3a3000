@@ -1,0 +1,3 @@
+source configs/config.ls3a2000
+usblooptest 0x81000070 0x20002
+

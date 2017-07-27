@@ -1,0 +1,138 @@
+echo_on
+setconfig core.cpuwidth 32
+setconfig core.cpucount 1
+setconfig core.abisize 32
+setconfig jtag.fastdata32 0
+setconfig put.fastdata 0
+setconfig usb_ejtag.put_speed 0
+setconfig karg.rd_start 0x80080000
+setconfig karg.bootparam_addr 0x8000e000
+setenv ENV_memsize 32
+setenv ENV_highmemsize 0
+setconfig helpaddr 0xffffffff8000f000
+###setconfig karg.memsize 256  #for 1a 1b
+
+setconfig jtag.jrhb 1
+setconfig jtag.jalrhb 1
+setconfig jtag.synci 1
+
+setconfig karg.bootparam_addr 0xa0000800
+###setconfig karg.bootparam_addr 0xa3fffe00  #for 1a,1b 
+
+function config_ddr
+config_sdr:
+#m4 0xbfe78034 0x2
+#msleep 10
+m4 0xbfe78030 0x00004009
+msleep 10
+m4 0xbfe78034 0x8203
+msleep 10
+m4 0xbfe78030 0x80004009
+
+msleep 2000
+
+config_ddr1:f
+
+m4 0xbfd00410 0xde885142
+msleep 300
+m4 0xbfd00414 0x222
+msleep 300
+memtest 0xa0000000 0xa0001000
+ret
+
+
+function program_nand
+#msleep 2000
+put ${1:/tmp/gzrom.bin} 0xa1000000
+callbin bin/nand_ops_ls1c.bin e 0 0x100000
+callbin bin/nand_ops_ls1c.bin w 0xa1000000 0 $filesize 0
+ret
+
+function testserial
+echo_on
+letl @a 0xbfe40000 0xbfe44000 0xbfe48000 0xbfe4c000 0xbfe4c400 0xbfe4c500 0xbfe4c600 0xbfe4c700 0xbfe4c800 0xbfe4c900 0xbfe4ca00 0xbfe4cb00 
+
+m4 0xbfe78038 {$(d4q 0xbfe78038 1)|3}
+m4 0xbfd00424 {$(d4q 0xbfd00424 1)|0x30}
+
+for letl i 0; {$i<12};letl i {$i+1}
+letl base ${a$i}
+m1 {$base+2} 0x47
+m1 {$base+3} 0x80
+m1 {$base+0} 0x41 0
+m1 {$base+3} 3
+m1 {$base+4} 3
+m1 {$base+1} 0
+end
+
+do while 1
+
+for letl i 0; {$i<12};letl i {%%d $i+1}
+letl base ${a$i}
+m1 $base {0x61+$i}
+m1 $base 0xd
+m1 $base 0xa
+end
+
+end
+ret
+
+function set_gpio_out
+letl pin val ${1:0} ${2:0}
+letl off {($pin/32)*4}
+letl pin {$pin%32}
+letl cfg {0xbfd010C0+$off}
+letl dir {0xbfd010d0+$off}
+letl out {0xbfd010f0+$off}
+
+m4 $cfg {$(d4q $cfg 1)|(1<<$pin)}
+m4 $dir {$(d4q $dir 1)&(~(1<<$pin))}
+do if $val
+m4 $out {$(d4q $out 1)|(1<<$pin)}
+else
+m4 $out {$(d4q $out 1)&~(1<<$pin)}
+end
+ret
+
+letl base 0xffffffffbfe10000
+source scripts/gmac.cmd
+
+function erase
+setconfig flash.type byte
+erase 0 0x7ffff 0x1000
+ret
+
+function program
+letl f ${1:/tmp/gzrom.bin}
+letl s $(test -s $f)
+setconfig helpaddr 0x8000f000
+put $f 0x81000000
+setconfig flash.type byte
+erase 0 0x7ffff 0x1000
+program 0x81000000 0 $s
+ret
+
+function program_cachelock
+letl f ${1:/tmp/gzrom.bin}
+letl s $(test -s $f)
+#hb 0 0xffffffff
+#watch 0 0xffffffff
+setconfig core.nocache 0
+cache_init
+setconfig flash.type byte
+erase 0 0x7ffff 0x1000
+map bin/spi.BIN 0xff210000
+letl len $(test -s bin/spi.BIN)
+sprogram 0xff210000 0  $len
+unmap
+m1 0xbfe80004 0x1
+cache 28 0x9fc00000 $len
+map $f 0xff240000
+erase 0 0x7ffff 0x1000
+setconfig core.nocache 1
+scallmem 0x9fc00000 0xff240000 0 $s
+setconfig core.nocache 0
+unmap
+ret
+echo config_sdr then program_nand
+

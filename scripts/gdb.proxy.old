@@ -1,0 +1,150 @@
+#!/usr/bin/perl
+use warnings;
+use Socket;
+use Fcntl;
+use IO::Select;
+use IO::Socket;
+use Math::BigRat;
+use bignum qw/hex oct/;
+
+sub set_unblock
+{
+my $fd = $_[0];
+		if ($^O eq 'MSWin32')
+		{
+			my $nonblocking = pack('L', 1);
+			ioctl($fd, 0x8004667e, unpack('I', pack('P', $nonblocking)));
+		}
+		else
+		{
+			fcntl($fd, F_SETFL, fcntl($socket, F_GETFL, 0) | O_NONBLOCK);
+		}
+}
+
+sub csum { 
+	$sum=0;
+	for($i=0;$i<length($_[0]);$i++)
+	{
+		$sum+=ord(substr($_[0],$i,1));
+	}
+	return $sum&0xff;
+}
+
+sub send_to_qemu
+{
+my ($s,$b)=@_;
+my $ack;
+my $c=csum($b);
+send($s,sprintf("\$$b#%02x",$c),0);
+recv($s, $ack, 1, 0);
+return $ack;
+}
+
+sub recv_from_qemu
+{
+my ($s,$b,$l)=@_;
+my $a='';
+while(1)
+{
+my $ret = recv($s, $b, 2048, 0);
+$a=$a . $b;
+if($a=~/\$(\w+)#\w{2}/)
+{
+$_[1]=$1;
+last
+}
+}
+return $ret;
+}
+
+sub read_addr
+{
+my ($s)=@_;
+my $b;
+send_to_qemu(@_);
+recv_from_qemu($s,$b,100,0);
+return pack(q(H*),$b);
+}
+
+sub read_addr8
+{
+my ($s,$d)=@_;
+my $b;
+send_to_qemu($s,sprintf("m%016x,8",$d));
+recv_from_qemu($s,$b,100,0);
+return unpack("Q",pack(q(H*),$b));
+}
+
+
+$socket = IO::Socket::INET->new(PeerAddr => '127.0.0.1:50010');
+$server = IO::Socket::INET->new(Listen    => 5, LocalAddr => 'localhost', LocalPort => 9000, Proto     => 'tcp',ReuseAddr=>1);
+$client = $server->accept();
+
+$|=1;
+
+
+$sel = IO::Select->new( ($socket,$client) );
+
+TOP: while(@ready = $sel->can_read) {
+	foreach $fh (@ready) {
+		if($fh == $socket) {
+			$ret = recv($socket, $buf, 4096, MSG_DONTWAIT);
+
+			if(defined($ret))
+			{
+				last TOP if !length($buf);
+				print $client "$buf";
+				print qq(q: $buf\n);
+			}
+		}
+		else {
+			$ret = recv($client, $buf, 4096, MSG_DONTWAIT);
+			if(defined($ret))
+			{
+
+				last TOP if !length($buf);
+				if($buf=~/\$m(\w+),(\w+)#/)
+				{
+					$addr=hex($1);
+					$count=hex($2);
+					if((($addr>>32)&0xf0000000)==0xc0000000)
+					{
+					 my $v;
+					 my $pgd=0xffffffff80a14000;
+					printf("read 0x%x\n", $addr);
+					 #right shift(14+1), left shit log2(2item) : 11 = (14+1-4) (pageshift+1-log2(2item)) 
+					 # 11 = (14-3)
+					 $pmd=read_addr8($socket,$pgd+ (($addr>>33)&0x3ff8));
+					 $pud=read_addr8($socket,(($addr>>22)&0x3ff8) + $pmd);
+					 $pte=read_addr8($socket,(($addr>>11) & 0x3ff0) + $pud);
+					 $pte1=read_addr8($socket,(($addr>>11) & 0x3ff0) + 8 + $pud);
+
+
+					 if($addr&(1<<14))
+					{
+					 $addr1 = 0x9800000000000000 + (($pte1>>14)<<14) + ($addr&((1<<14)-1));
+					}
+					 else
+					{
+					  $addr1 = 0x9800000000000000 + (($pte>>14)<<14)  + ($addr&((1<<14)-1));
+					}
+					 my $newbuf = sprintf("m%016x,%x",$addr1,$count);
+					 $buf=sprintf("\$$newbuf#%02x",csum($newbuf));
+					 printf qq(pmd=0x%x 0x%x 0x%x\n),$pmd,$pud,$pte;
+					 print qq(haha:$buf\n);
+					}
+				}
+
+				print $socket $buf;
+				print qq(g: $buf\n);
+			}
+		}
+	}
+}
+
+
+
+close($socket);
+close($client);
+close($server);
+

@@ -1,0 +1,88 @@
+#!/usr/bin/perl
+
+#/proc/self/maps
+#2b02b000-2b548000 r-xp 00000000 00:0c 5046067    /usr/lib/gstreamer-0.10/libgstffmpeg.so
+#@F=qx(readelf -S  /work/hisense/lwl/linux-2.6.27/vmlinux|grep " $_[0]" )=~/[\da-f]{6,}/g;
+$ENV{LC_ALL} = "C";
+local %f;
+
+sub iself
+{
+open my $file, $_[0];
+read $file, my $buf, 4;
+close $file;
+return (unpack("I",$buf) == 0x464c457f);
+}
+
+sub addfile
+{
+#fname offset addr
+#$f{$fname}->{offset0} = {addr0,addr1}
+my %sect;
+my @t2;
+my $fname = $_[0];
+my $h = $f{$fname};
+@t2 = sort {$a <=> $b}  keys $f{$fname};
+
+open my $fh,qq(readelf -S -W $fname 2>/dev/null|) or return;
+while(<$fh>)
+{
+   if(/Section Headers:/)
+   {
+    <$fh>;
+    <$fh>;
+    last;
+    }
+}
+
+
+while(<$fh>)
+{
+    last if(/Key to Flags:/);
+   my @a= split /\s+/,substr($_,7);
+   if($a[1] eq q(PROGBITS))
+   {
+   my $sectoff = hex($a[3]);
+   for(my $i;$i<@t2;$i++)
+   {
+     my $loadoff = $t2[$i];
+     my $loadsize = $h->{$loadoff}->[2];
+     my $loadaddr = $h->{$t2[$i]}->[0];
+     if($sectoff>=$loadoff && $sectoff-$loadoff<$loadsize)
+     {
+      $sect{$a[0]} = $sectoff-$loadoff + $loadaddr;
+      last;
+     }
+   }
+   }
+}
+close $fh;
+
+printf qq(add-symbol-file $fname 0x%x ), $sect{q(.text)};
+for(keys %sect)
+{
+ printf qq(-s %s 0x%x ), $_, $sect{$_};
+}
+printf qq(\n);
+}
+
+open my $fh, $ARGV[0];
+my $sysroot = $ARGV[1];
+
+while(<$fh>)
+{
+if(/(\S+)-(\S+) \S+ (\S+) \S+ \S+\s+(\S+)/)
+{
+$f{$sysroot . $4}->{hex($3)} = [hex($1),hex($2),hex($2)-hex($1)+1]
+}
+}
+close $fh;
+
+for (keys %f)
+{
+if( -f $_  && iself($_))
+{
+ addfile($_);
+}
+}
+

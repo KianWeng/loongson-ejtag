@@ -1,0 +1,109 @@
+usblooptest 0x81000070 0x10004
+setconfig core.nocache  1 
+gdbaccess add 0xbfc00000 0x10000 0
+gdbaccess add 0xbf000000 0xbf100000 0
+setconfig gdbserver.forcehb 1
+
+function program_flash
+letl f ${1:/tmp/demo.bin}
+letl s $(test -s $f)
+
+@echo_on
+setconfig helpaddr 0xa0000800
+setconfig flash.type 1dflash
+erase
+map $f 0xff280000
+program 0xff280000 0xbf000000 $s
+
+ret
+
+
+
+function program_spi
+letl f ${1:/tmp/demo.bin}
+letl s $(test -s $f)
+
+setconfig spi.iobase 0xbfe70000
+
+
+setconfig helpaddr 0xa0000800
+setconfig flash.type st25vf080
+@echo_on
+erase
+
+map $f 0xff280000
+program 0xff280000 0xbe000000 $s
+ret
+
+dellabel gdb
+
+function gdb
+#setconfig gdbserver.sim 1
+letl ibc $(expr ($(d4q 0xffffffffff301000 1)>>24)&0xf)
+letl dbc $(expr ($(d4q 0xffffffffff302000 1)>>24)&0xf)
+letl port $(gdbserver 0)
+letl pid $(fork)
+do if $pid
+gdbserver $port 1
+wait
+else
+> gdb.cmd echo_n
+
+>> gdb.cmd echo set architecture mips:isa32
+>> gdb.cmd echo set mips abi o32
+>> gdb.cmd echo mem 0xa0000000 0xa0010000 rw
+>> gdb.cmd echo mem 0xbfc00000 0xbfc10000 ro
+>> gdb.cmd echo mem 0xbf000000 0xbf100000 ro
+>> gdb.cmd echo set remote hardware-watchpoint-limit 1
+>> gdb.cmd echo set remote hardware-breakpoint-limit 1
+>> gdb.cmd echo set remotetimeout 20
+>> gdb.cmd echo define mysi
+>> gdb.cmd echo monitor si 0
+>> gdb.cmd echo c
+>> gdb.cmd echo end
+>> gdb.cmd echo target remote 127.0.0.1:$port
+! ${GDB:./mipsel-gdb} -x gdb.cmd $@
+exit 0
+end
+ret
+
+function reset_bd
+usblooptest 0x81000404
+jtagled  brst:0 dint:1;loop 10 jtagregs m8 10 0x4d000;jtagled  brst:1 dint:1;loop 10 jtagregs m8 10 0x4d000;
+ret
+
+
+function printtest
+do while 1;
+m1 0xbfe80000 0x31
+m1 0xbfe80000 0xd
+m1 0xbfe80000 0xa
+end
+ret
+
+function set_baudrate
+letl b ${1:0xbfe80000}
+m1 {$b+2} {0x01|0x02|0x04|0x00}
+m1 {$b+3} 0x80
+m1 $b 13
+m1  {$b+3} {0x03|0x08|0x00}
+m1 {$b+4} 3
+m1 {$b+1} 1
+ret
+
+function input_test
+@echo_off
+letl b ${1:0xbfe80000}
+do while 1;
+ do if {$(d1q {$b+5} 1)&1};
+  letl c $(d1q $b 1)
+   expr_n  %%c $c
+   m1 $b $c
+   do if {$c==0xd}
+    expr_n  %%c 0xa
+   m1 $b 0xa
+   end
+ end
+end
+ret
+

@@ -1,0 +1,13 @@
+echo_on
+#loop 20 m4 0xbfe78034 0xc0c
+loop 20 m4 0xbfe78030 0x4
+m4 0xbfe78034 0x9228ca00
+msleep 3000
+m4 0xbfd00420 0
+ddr2_config ddr2.txt
+memtest 0xa0000000 0xa0000100
+
+setconfig usb_ejtag.put_speed 0xff
+setconfig helpaddr 0xa5000000
+put gzrom.bin 0xa1000000
+callbin bin/spi_st25vf080.bin 0 0xa1000000 0x80000

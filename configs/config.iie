@@ -1,0 +1,105 @@
+setenv ENV_memsize 128
+setenv ENV_highmemsize 0
+setenv ENV_cpuclock 40000000
+setconfig usb_ejtag.put_speed 0x90
+setconfig spi.iobase 0xffffffffbfd60000
+source scripts/dumpserial.cmd
+
+function reboot
+m4 0xbfd10004 0
+m4 0xbfd10000 1
+ret
+
+function linux
+putelf /work/iie/linux-kernel-3.2.50/vmlinux
+karg console=ttyS0,115200 rdinit=/sbin/init initcall_debug=1 loglevel=20
+cont
+ret
+
+
+function erase
+setconfig flash.type byte
+erase_area 0 0x7ffff 0x10000
+ret
+
+function program_cachelock
+echo_on
+setconfig core.nocache 0
+letl f ${1:/tmp/gzrom.bin}
+let s $(test -s $f)
+cache_init
+setconfig flash.type byte
+erase_area 0 0x7ffff 0x10000
+
+map bin/spi-iie.BIN 0xff210000
+letl len $(test -s bin/spi-iie.BIN)
+sprogram 0xff210000 0  $len
+unmap
+m1 0xbfd60004 0x1
+cache 28 0x9fc00000 $len
+map $f 0xff240000
+erase_area 0 0x7ffff 0x10000
+setconfig core.nocache 1
+scallmem 0x9fc00000 0xff240000 0 $s
+ret
+
+function program
+letl f ${1:/tmp/gzrom.bin}
+letl s $(test -s $f)
+setconfig helpaddr 0x8000f000
+put $f 0x81000000
+setconfig flash.type byte
+erase_area 0 0x7ffff 0x10000
+#erase
+program 0x81000000 0 $s
+ret
+
+
+letl phy 16
+letl base 0xbfd90000
+
+function read_phy
+letl reg ${1:0}
+letl cnt ${2:1}
+do while $cnt
+letl data {($phy<<11)|($reg<<6)|1|0xc}
+m4 {$base+0x10} $data
+while {$(d4q $base+0x10)&1};
+expr_n %"0x%04x " $(d4q {$base+0x14} 1)
+letl reg {$reg+1}
+letl cnt {$cnt-1}
+end
+echo
+ret
+
+
+function write_phy
+letl reg ${1:0}
+letl data ${2:0}
+m4 {$base+0x14} $data
+letl data {($phy<<11)|($reg<<6)|2|1|0xc}
+m4 {$base+0x10} $data
+while {$(d4q $base+0x10)&1};
+ret
+
+
+function find_phy
+letl phy0 -1
+letl oldphy ${phy:0}
+for letl i 0;{$i<32};letl i {$i+1}
+let phy $i
+letl v $(read_phy 2)
+ do if {$v!=0&&$v!=0xffff} 
+  echo find phy $phy
+  letl phy0 $phy
+ end
+end
+do if {$phy0!=-1}
+let phy $phy0
+echo phy is $phy
+else
+let phy $oldphy
+echo can not find phy
+end
+ret
+

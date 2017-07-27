@@ -1,0 +1,27 @@
+echo test vector interrupt for ls232 cpu
+resetcpu 
+set
+m4 0xbf000000 0x0c4002d4
+m4 0xbf000004 0x209800c6
+memtest 0xa0000000 0xa0000100
+cp0s 0 d8 16 1
+cp0s 0 m8 16 2
+memset4 0x80000000 0 0x100000
+cp0s 1 d8 12 1
+cp0s 1 m8 12 0xfc000020
+cp0s 1 m8 12 0xfc000020
+cp0s 0 m8 13 0x800000
+#cp0s 0 m8 13 0x000000
+cp0s 0 m8 11 0x100
+cp0s 0 m8 9 0
+cp0s 0 d8 12 1
+cp0s 0 m8 12 0x8001
+cp0s 0 d8 13 1
+set pc 0x80100000
+memset4 0x80000000 0 0x400000
+m4 0x80100000 0x1000ffff
+hb 0x80000000 0xfffff
+set pc 0x80100000
+cont
+while $(expr ($(jtagregs d8q  10 1)&0x8)!=8)
+cp0s 0 d8 9 1

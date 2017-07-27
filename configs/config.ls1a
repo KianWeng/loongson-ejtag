@@ -1,0 +1,156 @@
+setenv ENV_memsize 128
+setenv ENV_highmemsize 0
+setenv ENV_cpuclock 300000000
+setenv ENV_busclock 133333333
+
+function testguess
+setconfig callbin.stackaddr 0x9fc81000
+setconfig callbin.ejtag 0
+scallmem 0x9fc40000 0x80000000 0x81000000 0xff 4 2
+ret
+
+function reboot
+m4 0xbfe7c060 1 1 1
+ret
+
+function configddr
+loop 20 m4 0xbfe78030 0x8888
+m4 0xbfd00420 0
+ddr2_config configs/ddr2.ls1a.txt
+memtest 0xa0000000 0xa0000100
+ret
+
+function erase
+setconfig flash.type byte
+erase
+ret
+
+function program
+echo_on
+echo ls1g+ flash program demo
+#maybe need set flash width and speed
+put ${1:/tmp/gzrom.bin} 0x81000000
+setconfig flash.type byte
+#erase_area 0 0x7ffff 0x10000
+erase
+program 0x81000000 0 $filesize
+ret
+
+function program_cachelock
+letl f ${1:/tmp/gzrom.bin}
+letl s $(test -s $f)
+#hb 0 0xffffffff
+#watch 0 0xffffffff
+setconfig core.nocache 0
+cache_init
+setconfig flash.type byte
+erase
+map bin/spi.BIN 0xff210000
+letl len $(test -s bin/spi.BIN)
+sprogram 0xff210000 0  $len
+unmap
+m1 0xbfe80004 0x1
+cache 28 0x9fc00000 $len
+map $f 0xff240000
+erase
+setconfig core.nocache 1
+scallmem 0x9fc00000 0xff240000 0 $s
+setconfig core.nocache 0
+unmap
+ret
+
+function codec_read
+local reg cnt
+do if $(expr $#==1)
+let reg cnt 0 0x80
+else
+let reg cnt $1 1
+end
+do while $cnt
+m4 0xbfe74018 $(expr ($reg<<16)|0x80000000)
+while $(expr ($(d4q  0xbfe74054 1)&1)==0);
+if $(expr ($cnt&0xf)==0) expr_n %"\n%02x: " $reg
+expr_n %"%04x " $(d4q 0xbfe74018 1)&0xffff
+let cnt $(expr $cnt-1)
+let reg $(expr $reg+1)
+end
+echo
+ret
+
+function codec_write
+m4 0xbfe74018 $(expr ($1<<16)|$2)
+while $(expr ($(d4q  0xbfe74054 1)&1)==0);
+ret
+
+function pci_config_read
+local bus dev func reg cnt addr type
+let bus dev func reg cnt  "$1" "$2" "$3" "$4" "$5"
+do if $(expr $bus==0)
+let addr type $(expr (1<<($dev+11))|($func<<8)|$reg) 0;
+else
+let addr type $(expr ($bus<<16)|($dev<<11)|($func<<8)|$reg) 0x10000;
+end
+m4 0xbfd01120 $(expr ($addr>>16)|$type)
+d4q $(expr 0xbc100000+($addr&0xfffc)) $cnt
+ret
+
+function pci_config_write
+local bus dev func reg cnt addr type
+let bus dev func reg data  "$1" "$2" "$3" "$4" "$5"
+do if $(expr $bus==0)
+let addr type $(expr (1<<($dev+11))|($func<<8)|$reg) 0;
+else
+let addr type $(expr ($bus<<16)|($dev<<11)|($func<<8)|$reg) 0x10000;
+end
+echo m4 0xbfd01120 $(expr ($addr>>16)|$type)
+echo m4 $(expr 0xbc100000+($addr&0xfffc)) $data
+ret
+
+function pci_list_bus
+letl bus depth reg count ${1:0} ${2:-1} ${3:0} ${4:8}
+do if $depth
+for letl i 0;$(expr $i<32);letl i $(expr $i+1)
+letl vendor $(call pci_config_read $bus $i 0 0 1)
+if $(expr $vendor==0xffffffff) loop_continue
+letl misc $(call pci_config_read $bus $i 0 0xc 1)
+letl n $(expr $misc&0x800000?8:1)
+ for letl j 0;$(expr $j<8);letl j $(expr $j+1)
+   letl vendor $(call pci_config_read $bus $i $j 0 1)
+   if $(expr $vendor==0xffffffff) loop_continue
+    echo_n "$bus\t$i\t$j:\t"
+    call pci_config_read $bus $i $j $reg $count
+    letl class $(call pci_config_read $bus $i $j 8 1)
+    if $(expr ($class&0x06040000)!=0x06040000) loop_continue 
+    letl class $(call pci_config_read $bus $i $j 0x18 1)
+    letl busno $(expr ($class>>8)&0xff)
+    call pci_list_bus $busno $(expr $depth-1) $reg $count
+ end
+end
+end
+ret
+
+function set_gpio_out
+letl pin val ${1:0} ${2:0}
+letl off {($pin/32)*4}
+letl pin {$pin%32}
+letl cfg {0xbfd010C0+$off}
+letl dir {0xbfd010d0+$off}
+letl out {0xbfd010f0+$off}
+
+m4 $cfg {$(d4q $cfg 1)|(1<<$pin)}
+m4 $dir {$(d4q $dir 1)&(~(1<<$pin))}
+do if $val
+m4 $out {$(d4q $out 1)|(1<<$pin)}
+else
+m4 $out {$(d4q $out 1)&~(1<<$pin)}
+end
+ret
+
+
+
+letl phy 16
+letl base 0xffffffffbfe10000
+source "scripts/gmac.cmd"
+
+
+info f

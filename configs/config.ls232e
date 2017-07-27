@@ -1,0 +1,7 @@
+#setconfig jtag.datawidth 64
+setconfig core.cpuwidth 32
+setconfig core.cpucount 1
+setconfig core.abisize 32
+setconfig jtag.fastdata32 0
+setconfig put.fastdata 0
+

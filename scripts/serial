@@ -1,0 +1,64 @@
+#!/usr/bin/perl
+use bignum;
+use Math::BigRat;
+unshift @INC,qq(./scripts);
+require qq(io.pm);
+
+sub report_freq
+{
+my ($clk,$cpu,$ddr,$pll,$ctrl);
+($pll,$ctrl)=@_;
+$clk=(12+($pll&0x3f))*33333333/2 + (($pll>>8)&0x3ff)*33333333/2/1024;
+$cpu = (($ctrl&0x300)==0x300)?33333333:($ctrl&(1<<25))?$clk/(($ctrl>>20)&0x1f):$clk/2;
+$ddr= (($ctrl&0xc00)==0xc00)?33333333:($ctrl&(1<<19))?$clk/(($ctrl>>14)&0x1f):$clk/2;
+print "cpuclk=$cpu,ddrclk=$ddr\n";
+do_cmd("scallbin bin/caclfreq.bin");
+return ($cpu,$ddr);
+}
+
+sub config_serial{
+my $serialdiv = $_[0];
+outb($base+2,0x47); #fifo4
+outb($base+3,0x80);
+outb($base+0,$serialdiv&0xff);
+outb($base+1,$serialdiv>>8);
+outb($base+3,3); #8bit
+outb($base+4,3); #mcr
+outb($base+1,0); #mcr
+}
+
+
+sub putchar{
+my $c = $_[0];
+while((inb($base+5) & 0x20) == 0){};
+outb($base,$c);
+}
+
+sub puts{
+my $str=$_[0];
+for($i=0;$i<length($str);$i++)
+{
+ putchar(ord(substr($str,$i,1)));
+}
+}
+
+sub disable_gpio{
+outl(0xbfd010c0,0);
+outl(0xbfd010c4,0);
+}
+
+
+$ctrl = inl(0xbfe78034);
+$pll = inl(0xbfe78030);
+
+($cpu,$ddr)=report_freq($pll,$ctrl);
+
+my $serialdiv=int($ddr/115200/16/2);
+print "serial div is $serialdiv\n";
+$base=@ARGV?hex($ARGV[0]):0xbfe40000;
+
+disable_gpio;
+config_serial($serialdiv);
+puts("hahah\r\n");
+
+#do_cmd("set pc 0xbfc03dbc;cont");

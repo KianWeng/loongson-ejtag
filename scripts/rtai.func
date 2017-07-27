@@ -1,0 +1,81 @@
+define prun24
+p/x rthal.tsc.tsc
+set $task=rt_linux_task.rnext
+while $task != &rt_linux_task
+if rt_current == $task
+printf "*"
+else
+printf " " 
+end
+printf "%d t=(struct rt_task_struct *)%p p=%p resume_time=0x%llx period_resume_time=0x%llx lnxtsk=%p\n", $task->priority, $task, *(unsigned long *)((void *)$task->stack+128), $task->resume_time, $task->periodic_resume_time, $task->lnxtsk
+set $task=$task->rnext
+end
+end
+
+define prun
+p/x tsc
+set $task=rt_smp_linux_task[0].rnext
+while $task != &rt_smp_linux_task[0]
+if rt_smp_current[0] == $task
+printf "*"
+else
+printf " " 
+end
+printf "%d t=(struct rt_task_struct *)%p p=%p resume_time=0x%llx period_resume_time=0x%llx lnxtsk=%p\n", $task->priority, $task, *(unsigned long *)((void *)$task->stack+128), $task->resume_time, $task->periodic_resume_time, $task->lnxtsk
+set $task=$task->rnext
+end
+end
+
+
+define ptime24
+p/x rthal.tsc.tsc
+set $task=rt_linux_task.tnext
+while $task != &rt_linux_task
+printf "%d t=(struct rt_task_struct *)%p p=%p resume=0x%llx lnxtsk=%p\n", $task->priority, $task, *(unsigned long *)((void *)$task->stack+128), $task->resume_time, $task->lnxtsk
+set $task=$task->tnext
+end
+end
+
+define ptime
+p/x tsc
+set $task=rt_smp_linux_task[0].tnext
+while $task != &rt_smp_linux_task[0]
+printf "%d t=(struct rt_task_struct *)%p p=%p resume=0x%llx period_resume_time=0x%llx lnxtsk=%p\n", $task->priority, $task, *(unsigned long *)((void *)$task->stack+128), $task->resume_time, $task->periodic_resume_time, $task->lnxtsk
+set $task=$task->tnext
+end
+end
+
+define ptasks24
+p/x rthal.tsc.tsc
+set $task=&rt_linux_task
+while  $task
+if rt_current == $task
+printf "*"
+else
+printf " " 
+end
+printf "0x%x t=(struct rt_task_struct *)%p p=%p resume_time=0x%llx  lnxtsk=%p\n", $task->priority, $task, $task->stack?*(unsigned long *)((void *)$task->stack+128):-1, $task->resume_time,  $task->lnxtsk
+set $task=$task->next
+if $task == &rt_linux_task 
+loop_break
+end
+end
+end
+
+
+define ptasks
+p/x tsc
+set $task=&rt_smp_linux_task[0]
+while  $task
+if rt_smp_current[0] == $task
+printf "*"
+else
+printf " " 
+end
+printf "0x%x t=(struct rt_task_struct *)%p p=%p resume_time=0x%llx period_resume_time=0x%llx lnxtsk=%p\n", $task->priority, $task, $task->stack?*(unsigned long *)((void *)$task->stack+128):-1, $task->resume_time, $task->periodic_resume_time , $task->lnxtsk
+set $task=$task->next
+if $task == &rt_smp_linux_task[0] 
+loop_break
+end
+end
+end

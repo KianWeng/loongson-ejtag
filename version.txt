@@ -1,0 +1,14 @@
+version=3.24
+v3.20 add ls3a2000 support.
+v3.21 update put, get, callbin for ls3a and  ls3a2000 to avoid guess.
+v3.21.2 update ls3a config, fix cpu window, disable ddr window. program_cachelock work well.
+v3.21.3 update ls3a2000, ls3a config, memset to init cachelocked area first.
+v3.22.1 add ls3c(ls3b1500) support.
+v3.22.2 update ls3a,ls3c program_cachelock
+v3.22.3 update ls1b program_cachelock, ls3a i2c function etc.
+v3.22.4 add more user debug cmd.
+v3.22.5 change some script.
+v3.23 fix expr cmd,add dummy, devmem,update scripts.
+v3.23.1 fix abi maped address check, update gdb1.py.
+v3.23.2 new mipsel-gdb, support python. 
+v3.24 fix gdb for mcpu, add more usefull tools.

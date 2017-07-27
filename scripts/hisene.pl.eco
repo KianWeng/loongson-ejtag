@@ -1,0 +1,41 @@
+#!/usr/bin/perl
+use bignum;
+unshift @INC,qq(./scripts);
+require qq(io.pm);
+#open F,q(/work/hisense/wrs/pmon/fat/pmon4hisense/Targets/Hisense/hisense/pll_and_ddr_177_polling_dsp.S);
+
+sub configddr
+{
+ $waitendif=0;
+open F, $_[0];
+while(<F>)
+{
+chomp;
+next if(m#^//#);
+if(/#if __DEBUG_PRINT__/)
+{
+ $waitendif=1;
+ next;
+}
+if(/#endif/)
+{
+  $waitendif=0;
+  next;
+}
+next if $waitendif;
+
+if(/li (\w+),(\w+)/){ eval "\$$1 = $2;\n" }
+if(/sw (\w+),(\w+)\((\w+)\)/){eval qq(outl(  $2 + $$3,$$1);\n);}
+#if(/sw (\w+),(\w+)\((\w+)\)/){printf qq(mml 0x%x 0x%x\n), eval($2 + $$3), eval($$1);}
+if(/ddr_polling/) {select(undef, undef, undef, 0.25);}
+if(/delay1000/){ select(undef, undef, undef, 0.1); }
+if(/delay10000/){ select(undef, undef, undef, 1); }
+}
+close(F);
+}
+
+#do_cmd("echo_on");
+configddr q(hisense/HS3K_PLL_1066_0417.S);
+configddr q(hisense/HS3K_MVDDR_1066_0422_PRINT_MEMTEST.S);
+
+

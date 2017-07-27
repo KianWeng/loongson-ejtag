@@ -1,0 +1,41 @@
+echo_on
+function program
+echo ls232 flash program demo
+#maybe need set flash width and speed
+#waitreg 1 0x5a5a5a5a
+waitfacc
+m4 0xbf000000 0x0c4002d4 
+m4 0xbf000004 0x209800c6
+memtest 0xa0000000 0xa0000100
+setconfig helpaddr 0xa0008000
+setconfig flash.type sst8
+erase
+msleep 2000
+put ${1:gzrom.bin} 0xa0200000
+program 0xa0200000 0xbfc00000 0x80000
+q
+ret
+
+function program_cachelock
+letl f ${1:/tmp/gzrom.bin}
+letl s $(test -s $f)
+#hb 0 0xffffffff
+#watch 0 0xffffffff
+setconfig core.nocache 0
+cache_init
+setconfig flash.type sst8
+erase
+map bin/sst.bin 0xff210000
+letl len $(test -s bin/sst.bin)
+sprogram 0xff210000 0  $len
+unmap
+cache 28 0x9fc00000 $len
+map $f 0xff240000
+erase
+setconfig core.nocache 1
+setconfig callbin.stackaddr 0xff220000
+scallmem 0x9fc00000 iuep 0xbfc00000 0 $s 0x1000 0xff240000 0 $s
+setconfig core.nocache 0
+unmap
+ret
+info f

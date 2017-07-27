@@ -1,0 +1,348 @@
+echo_on
+setenv ENV_memsize 256
+function configddr
+resetcpu
+m4 0xbfd00420 0
+ddr2_config configs/ddr2.ls1gp.txt
+m4 0xff200028 0
+memtest 0xa0000000 0xa0000100
+if $(d4q 0xff20001c 1) ret;
+m4 0xff200030 0
+memtest1 0xa0000000 0xa0100000 0xa0000000 0x200
+if $(d4q 0xff200020 1) ret;
+ret
+
+function erase
+setconfig flash.type byte
+erase
+m1 0xbfe80004 0x21
+ret
+
+function program
+#setconfig flash.type st25vf080
+setconfig flash.type byte
+erase
+msleep 1000
+put ${1:/tmp/gzrom.bin} 0x81000000
+program 0x81000000 0 $filesize
+ret
+
+function program1
+letl f ${1:/tmp/gzrom.bin}
+setconfig flash.type byte
+erase
+put $f 0x81000000
+callbin bin/spi_st25vf064.bin 0 0x81000000 $filesize
+m1 0xbfe80004 0x21
+ret
+
+function program_sram
+letl file ${1:/tmp/gzrom.bin}
+setconfig flash.type byte
+erase
+map $file 0xff240000
+program 0xff240000 0 $(test -s $file)
+m1 0xbfe80004 0x21
+ret
+
+function program_sram1
+letl f ${1:/tmp/gzrom.bin}
+setconfig flash.type byte
+erase
+map $f 0xff240000
+callbin bin/spi_st25vf064.bin 0 0xff240000 $(test -s $f)
+m1 0xbfe80004 0x21
+ret
+
+function program_cachelock
+letl f ${1:/tmp/gzrom.bin}
+letl s $(test -s $f)
+#hb 0 0xffffffff
+#watch 0 0xffffffff
+setconfig core.nocache 0
+cache_init
+setconfig flash.type byte
+erase
+map bin/spi.BIN 0xff210000
+letl len $(test -s bin/spi.BIN)
+sprogram 0xff210000 0  $len
+unmap
+m1 0xbfe80004 0x1
+cache 28 0x9fc00000 $len
+map $f 0xff240000
+erase
+setconfig core.nocache 1
+scallmem 0x9fc00000 0xff240000 0 $s
+setconfig core.nocache 0
+unmap
+ret
+
+function fpga
+letl tt $(test -s fpga-rom.bin)
+callbin bin/fpga.bin i
+for letl l 0;{$l<$tt};letl l {$l+0x80000}
+put fpga-rom.bin 0x9f410000  0x80000 $l
+ do if {$filesize<0x80000}
+  callbin bin/fpga.bin P 0x9f410000 $filesize
+ else
+  callbin bin/fpga.bin p 0x9f410000 $filesize
+ end
+end
+ret
+
+function fpga1
+letl tt $(test -s fpga-rom.bin)
+callbin bin/fpga.bin i
+for letl l 0;{$l<$tt};letl l {$l+0x80000}
+put fpga-rom.bin 0x9f410000  0x80000 $l
+callbin bin/fpga.bin p 0x9f410000 $filesize
+end
+callbin bin/fpga.bin c
+ret
+
+function testserial
+echo_on
+letl defbaud {33333333/16/9600}
+letl baud ${1:$defbaud}
+letl @a 0xbfe40000 0xbfe44000 0xbfe48000 0xbfe4c000 
+
+
+
+for letl i 0; {$i<4};letl i {$i+1}
+letl base ${a$i}
+m1 {$base+2} 0x47
+m1 {$base+3} 0x80
+m1 {$base+0} {$baud&0xff} {($baud>>8)&0xff}
+m1 {$base+3} 3
+m1 {$base+4} 3
+m1 {$base+1} 0
+end
+
+do while 1
+
+for letl i 0; {$i<12};letl i {%%d $i+1}
+letl base ${a$i}
+m1 $base {0x61+$i}
+m1 $base 0xd
+m1 $base 0xa
+end
+
+end
+ret
+
+
+function testserial1
+letl defbaud {33333333/16/9600}
+letl baud ${1:$defbaud}
+letl base ${2:0xbfe44000}
+
+
+do while 1:
+m1 {$base+2} 0x47
+m1 {$base+3} 0x80
+m1 {$base+0} {$baud&0xff} {($baud>>8)&0xff}
+m1 {$base+3} 3
+m1 {$base+4} 3
+m1 {$base+1} 0
+
+letl str $(expr "%%04d" $baud)
+echo $str
+for letl i 1;{$i<5};letl i {$i+1}
+m1 $base {$(expr1 substr $str $i 1)+0x30}
+end
+
+m1 $base 0xd
+m1 $base 0xa
+letl baud {$baud+1}
+end
+ret
+
+
+
+function program_local
+setconfig putelf.uncached 0
+put ${1:/tmp/gzrom.bin} 0x81000000
+callbin bin/sst.bin iep 0xbfc00000 0 $filesize 0x1000 0x81000000 0 $filesize
+
+ret
+
+
+function program_local1
+
+setconfig putelf.uncached 0
+
+letl file ${1:/tmp/gzrom.bin}
+letl filesize $(test -s $file)
+map $file 0xff240000
+callbin bin/sst.bin iep 0xbfc00000 0 $filesize 0x1000 0xff240000 0 $filesize
+
+ret
+
+function program_local2
+setconfig putelf.uncached 0
+setconfig callbin.stacksize 0x800
+put ${1:/tmp/gzrom.bin} 0xb0003000
+callbin bin/sst.bin iep 0xbfc00000 0 $filesize 0x1000 0xb0003000 0 $filesize
+
+ret
+
+function program_spi
+setconfig putelf.uncached 0
+setconfig callbin.stacksize 0x800
+put ${1:/tmp/gzrom.bin} 0xb0003000
+
+setconfig flash.type byte
+erase
+msleep 1000
+program 0xb0003000 0 $filesize
+
+ret
+
+function cache_init1
+call cache_config
+call cache_init
+setconfig helpaddr 0x90000000
+ret
+
+
+function spi_init
+let b 0xffffffffbfe80000
+letl d ${1:4}
+m1 {$b+0x1} 0xc0
+m1 {$b+0x4} {$d<<4}
+m1 {$b+0x3} {(0x5&~3)|(($d>>2)&3)}
+m1 {$b+0x6} 0x1
+m1 {$b+0x0} {(0x51&~3)|($d&3)}
+m4 0xff200100 $b
+setconfig spi.inited 1
+ret
+
+function test_ohci
+letl d $(d4q 0xbfd00424 1)
+m4 0xbfd00424 {$d&~0x80000000}
+m4 0xbfe08004 0x80
+m4 0xbfe08048 0x200
+d4 0xbfe08000 40
+ret
+
+function test_ehci
+letl d $(d4q 0xbfd00424 1)
+m4 0xbfd00424 {$d&~0x80000000}
+m4 0xbfe00010 2
+m4 0xbfe00054 0x1000
+m4 0xbfe00010 1
+m4 0xbfe00050 1
+d4 0xbfe00000 40
+ret
+
+function test_sdio
+m4 0xbfd010d0 0xc90;m4 0xbfd010f0 0x410;
+ret
+
+function test_rport
+m4 0xbfd010d0 {$(d4q 0xbfd010d0 1)|0x400}
+m4 0xbfd010f0 {$(d4q 0xbfd010d0 1)&~0x400}
+m4 0xb08000a8 0x100
+m4 0xb08000a4 3
+echo_off
+loop -1 d4q 0xb08000a0 4
+ret
+
+function test_spi2
+m4 0xbfd010d0 0xc90;
+m4 0xbfd010f0 0x400;
+scallbin bin/spi_n25q128_zx400.bin 0 0xa1000000 0x1000 0xbfe5c000 i
+ret
+
+
+function test_spi2_dma
+m4 0xbfd010d0 0xc90;
+m4 0xbfd010f0 0x400;
+letl d 4
+
+let b 0xbfe5c000
+m1 {$b+0x1} 0xc0
+m1 {$b+0x3} {(0x5&~3)|(($d>>2)&3)}
+m1 {$b+0x0} {(0x51&~3)|($d&3)}
+letl cmd {$b+4}
+
+#            order saddr        daddr    length step_length step_times cmd
+m4 0xa000e000 0    0x01000000 0x1fe5c008 0x1000   0           1        0x1001
+m4 $cmd {(0x4000<<8)|0x73}
+m4 0xbfd01160 {0xe000|0x8|0x1}
+loop 10 d4q {$b+0xc} 1
+m4 0xbfd01160 {0x4000|4|1}
+d4 0xa0004000 7
+
+ret
+
+function test_fifo
+m4 0xb0800080 0xff
+msleep 1
+#fifo channel
+m4 0xb0800084 0
+#               source     dest        rcnt     wcnt
+m4 0xb0800040   0x01000000 0x02000000  0x100    0x100
+m4 0xb0800050   0x11
+msleep 1
+d4 0xb0800040 6
+d4 0xa2000000 10
+ret
+
+function test_asip
+m4 0xbfd00424 {$(d4q 0xbfd00424 1)|0x40000000}
+asip set
+ret
+
+letl i2creg 0xbfe58000;
+
+function i2c0_init
+ let i2creg 0xbfe58000;
+ m1 $(expr $i2creg+0x2) 0x0;
+ m1 $(expr $i2creg+0x0) 0x2c;
+ m1 $(expr $i2creg+0x1) 0x03;
+ m1 $(expr $i2creg+0x2) 0x80;
+ret
+
+function i2c0_read
+letl cr dr adr reg count $(expr $i2creg+0x4) $(expr $i2creg+0x3) "$1" "$2" $(expr ($#>3)*($3-1)+1)
+do while $(expr $count>0)
+ m1 $dr $adr;
+ m1 $cr 0x90; 
+ while $(expr $(d1q  $cr 1)&0x2); 
+
+ m1 $dr $reg;
+ m1 $cr 0x10;
+ while $(expr $(d1q  $cr 1)&0x2); 
+
+ m1 $dr $(expr $adr|0x1)
+
+ m1 $cr 0x90;
+ while $(expr $(d1q  $cr 1)&0x2); 
+
+ m1 $cr 0x28;
+ while $(expr $(d1q  $cr 1)&0x2); 
+ 
+ echo_n $(d1q $dr 1) " "
+ 
+ m1 $cr 0x40;
+ while $(expr $(d1q  $cr 1)&0x40); 
+ letl reg count $(expr $reg+1) $(expr $count-1)
+end
+echo
+
+ret
+
+
+
+
+
+echo ls1g+ flash program demo
+#maybe need set flash width and speed
+#waitreg 1 0x5a5a5a5a
+#waitfacc
+setconfig helpaddr 0xffffffffb0000000
+echo use call configddr to init ddr
+echo use call program_sram to program
+
+
